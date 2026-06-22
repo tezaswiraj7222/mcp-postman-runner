@@ -1,6 +1,6 @@
 {
   "name": "mcp-postman-runner",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "A Model Context Protocol (MCP) server that executes the requests in a Postman collection folder — resolving variables, running pre-request auth scripts, firing each request, and evaluating the embedded pm.test scripts — and returns structured results for AI-driven API testing. Built for the Jira → Postman → assess → comment workflow.",
   "type": "module",
   "main": "dist/index.js",

@@ -1,3 +1,9 @@
+## 1.0.0 (2026-06-22)
+
+### ✨ Features
+
+* configure repository URLs and setup publish workflow with GITHUB_TOKEN ([2d9c0bb](https://github.com/tezaswiraj7222/mcp-postman-runner/commit/2d9c0bb38e79b097616ba3827088f9bf0d86bc70))
+
 # Changelog
 
 All notable changes to this project are documented in this file.
