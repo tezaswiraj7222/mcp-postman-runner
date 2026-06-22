@@ -1,3 +1,9 @@
+## [1.0.1](https://github.com/tezaswiraj7222/mcp-postman-runner/compare/v1.0.0...v1.0.1) (2026-06-22)
+
+### ♻️ Refactoring
+
+* remove all maxxton references and make examples/tests generic ([d8b8004](https://github.com/tezaswiraj7222/mcp-postman-runner/commit/d8b800407fc56ee793471fdf3a0b3569588a3232))
+
 ## 1.0.0 (2026-06-22)
 
 ### ✨ Features
