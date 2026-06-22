@@ -75,7 +75,7 @@ connector's `getCollection`), and optionally an **environment JSON**.
   "results": [
     {
       "name": "TC-01 Happy path", "method": "GET",
-      "url": "https://api-dev.example.net/maxxton/v2/countries/states/cities",
+      "url": "https://api-dev.example.net/api/v2/countries/states/cities",
       "status": 200, "statusText": "OK", "timeMs": 142,
       "assertionsPassed": 3, "assertionsFailed": 0,
       "assertions": [ { "name": "status is 200", "passed": true, "error": null } ],

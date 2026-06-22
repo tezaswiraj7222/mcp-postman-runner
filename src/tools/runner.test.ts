@@ -20,7 +20,7 @@ beforeEach(() => {
   authCalls = 0;
   cityCalls = 0;
   vi.stubGlobal("fetch", async (url: string, _opts?: any) => {
-    if (url.includes("/maxxton/v1/authenticate")) {
+    if (url.includes("/api/v1/authenticate")) {
       authCalls++;
       return { status: 200, statusText: "OK", text: async () => JSON.stringify({ access_token: "TOK123", expires_in: 3600 }) } as any;
     }
@@ -38,12 +38,12 @@ beforeEach(() => {
   });
 });
 
-const U = "{{url}}maxxton/v2/countries/states/cities";
+const U = "{{url}}api/v2/countries/states/cities";
 const H = [{ key: "Authorization", value: "bearer {{token}}" }];
 const test = (exec: string[]) => ({ listen: "test", script: { exec } });
 const collection = {
   info: { name: "Jira-Automation-collection" },
-  variable: [{ key: "url", value: "https://api-dev.maxxton.net/" }],
+  variable: [{ key: "url", value: "https://api-dev.example.net/" }],
   event: [{ listen: "prerequest", script: { exec: [
     "const token=pm.environment.get('token');const authURL=pm.environment.get('authenticationURL');",
     "if(!token){pm.sendRequest({method:'POST',url:authURL},(e,r)=>{pm.environment.set('token', r.json().access_token);});}",
@@ -64,8 +64,8 @@ const collection = {
   ] }],
 };
 const environment = { name: "RVP", values: [
-  { key: "url", value: "https://api-dev.maxxton.net/", enabled: true },
-  { key: "authenticationURL", value: "https://api-dev.maxxton.net/maxxton/v1/authenticate?x=1", enabled: true },
+  { key: "url", value: "https://api-dev.example.net/", enabled: true },
+  { key: "authenticationURL", value: "https://api-dev.example.net/api/v1/authenticate?x=1", enabled: true },
   { key: "token", value: "", enabled: true },
 ] };
 

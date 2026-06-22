@@ -94,4 +94,4 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 
 ## Questions?
 
-Open an issue or email t.raj@maxxton.com.
+Open an issue on GitHub.

@@ -13,8 +13,7 @@ Only the latest published version on npm is supported with security updates.
 
 ### How to Report
 
-Please report security issues privately to **t.raj@maxxton.com** (or open a GitHub
-security advisory). Do **not** open a public issue for an undisclosed vulnerability.
+Please report security issues privately via GitHub Private Vulnerability Reporting or by creating a Security Advisory. Do **not** open a public issue for an undisclosed vulnerability.
 
 ### What to Include
 
