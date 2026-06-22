@@ -73,7 +73,7 @@ ${colors.bold}${colors.blue}MCP CONFIGURATION:${colors.reset}
   }${colors.reset}
 
 ${colors.bold}${colors.blue}DOCUMENTATION:${colors.reset}
-  ${colors.underline}https://github.com/REPLACE-ORG/mcp-postman-runner#readme${colors.reset}
+  ${colors.underline}https://github.com/tezaswiraj7222/mcp-postman-runner#readme${colors.reset}
 `);
 }
 

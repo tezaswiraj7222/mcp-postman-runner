@@ -115,5 +115,5 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md). Uses Conventional Commits + semantic
 
 ## 🔗 Links
 
-- Issues: https://github.com/REPLACE-ORG/mcp-postman-runner/issues
+- Issues: https://github.com/tezaswiraj7222/mcp-postman-runner/issues
 - MCP: https://modelcontextprotocol.io

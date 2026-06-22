@@ -79,13 +79,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/REPLACE-ORG/mcp-postman-runner.git"
+    "url": "git+https://github.com/tezaswiraj7222/mcp-postman-runner.git"
   },
   "bugs": {
-    "url": "https://github.com/REPLACE-ORG/mcp-postman-runner/issues",
+    "url": "https://github.com/tezaswiraj7222/mcp-postman-runner/issues",
     "email": "t.raj@maxxton.com"
   },
-  "homepage": "https://github.com/REPLACE-ORG/mcp-postman-runner#readme",
+  "homepage": "https://github.com/tezaswiraj7222/mcp-postman-runner#readme",
   "engines": {
     "node": ">=18.0.0",
     "npm": ">=9.0.0"
