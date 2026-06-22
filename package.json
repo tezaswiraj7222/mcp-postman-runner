@@ -1,0 +1,123 @@
+{
+  "name": "mcp-postman-runner",
+  "version": "0.1.0",
+  "description": "A Model Context Protocol (MCP) server that executes the requests in a Postman collection folder — resolving variables, running pre-request auth scripts, firing each request, and evaluating the embedded pm.test scripts — and returns structured results for AI-driven API testing. Built for the Jira → Postman → assess → comment workflow.",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "mcp-postman-runner": "dist/index.js",
+    "postman-runner-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "assets",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit && npm run bundle && npm run minify",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js --packages=external",
+    "minify": "terser dist/index.js -o dist/index.js -c -m --module --mangle-props regex=/^_/ && node -e \"const f=require('fs');f.writeFileSync('dist/index.js','#!/usr/bin/env node\\n'+f.readFileSync('dist/index.js','utf8'))\"",
+    "dev": "ts-node --esm src/index.ts",
+    "start": "node dist/index.js",
+    "clean": "node -e \"require('fs').rmSync('dist', {recursive: true, force: true})\"",
+    "prebuild": "npm run clean",
+    "prepublishOnly": "npm run build",
+    "prepack": "npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "pack:dry": "npm pack --dry-run"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "postman",
+    "newman",
+    "collection-runner",
+    "api-testing",
+    "qa",
+    "test-automation",
+    "pm-test",
+    "jira",
+    "claude",
+    "copilot",
+    "ai-assistant",
+    "ai",
+    "llm",
+    "developer-tools",
+    "rest-api",
+    "integration-testing",
+    "cursor",
+    "windsurf",
+    "anthropic",
+    "openai"
+  ],
+  "author": {
+    "name": "Tezaswi Raj (github: tezaswiraj7222)",
+    "email": "t.raj@maxxton.com",
+    "url": "https://github.com/tezaswiraj7222"
+  },
+  "contributors": [
+    {
+      "name": "Tezaswi Raj (github: tezaswiraj7222)",
+      "email": "t.raj@maxxton.com",
+      "url": "https://github.com/tezaswiraj7222"
+    }
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/REPLACE-ORG/mcp-postman-runner.git"
+  },
+  "bugs": {
+    "url": "https://github.com/REPLACE-ORG/mcp-postman-runner/issues",
+    "email": "t.raj@maxxton.com"
+  },
+  "homepage": "https://github.com/REPLACE-ORG/mcp-postman-runner#readme",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^11.0.6",
+    "@semantic-release/npm": "^12.0.2",
+    "@semantic-release/release-notes-generator": "^14.1.0",
+    "@types/node": "^25.2.1",
+    "conventional-changelog-conventionalcommits": "^9.1.0",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.0.0",
+    "semantic-release": "^24.2.9",
+    "terser": "^5.46.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.0"
+  }
+}

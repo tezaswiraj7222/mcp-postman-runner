@@ -1,0 +1,62 @@
+# ============================================
+# Git Ignore File for mcp-postman-runner
+# ============================================
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# IDE/Editor
+.idea/
+*.swp
+*.swo
+*~
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Environment files (NEVER commit these!)
+.env
+.env.*
+.env.local
+.env.*.local
+
+# Local MCP config with tokens
+mcp.json
+.vscode/mcp.json
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# npm pack output
+*.tgz
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Secrets and keys (NEVER commit these!)
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*token*.json
+*credential*.json
+*secret*.json
+
+# Deploy keys (generated for CI)
+*.deploy.key

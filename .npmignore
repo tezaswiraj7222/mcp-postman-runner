@@ -1,0 +1,69 @@
+# ============================================
+# NPM Ignore File for mcp-postman-runner
+# Only the built dist/ + a few docs are published.
+# ============================================
+
+# Source files (only publish dist/)
+src/
+*.ts
+!*.d.ts
+
+# TypeScript / test config
+tsconfig.json
+tsconfig*.json
+vitest.config.ts
+
+# Editor and IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment and secrets
+.env
+.env.*
+mcp.json
+.vscode/mcp.json
+*.pem
+*.key
+*token*.json
+*credential*.json
+*secret*.json
+
+# Semantic release config
+.releaserc.json
+
+# Development files
+*.log
+npm-debug.log*
+.npm
+package-lock.json
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Tests
+*.test.ts
+*.spec.ts
+coverage/
+.nyc_output/
+
+# Documentation (keep only README, CHANGELOG, LICENSE, SECURITY via package.json "files")
+docs/
+CONTRIBUTING.md
+ARCHITECTURE.md
+
+# CI/CD
+.github/
+
+# Build artifacts
+*.tgz
+*.tar.gz
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
