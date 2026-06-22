@@ -7,6 +7,8 @@
  * sandbox. No external dependencies.
  */
 
+import crypto from "crypto";
+
 const MAX_BODY_CHARS = 20_000;
 
 /* ============ types ============ */
@@ -107,7 +109,48 @@ class Assertion {
   get false(): this { this._check(this.actual === false, `expected ${j(this.actual)} to be false`); return this; }
   get null(): this { this._check(this.actual === null, `expected ${j(this.actual)} to be null`); return this; }
   get undefined(): this { this._check(this.actual === undefined, `expected value to be undefined`); return this; }
-  get ok(): this { this._check(!!this.actual, `expected ${j(this.actual)} to be truthy`); return this; }
+  get ok(): this {
+    if (this.actual && typeof this.actual === "object" && typeof this.actual.code === "number") {
+      const code = this.actual.code;
+      this._check(code === 200, `expected response status 200 OK but got ${code}`);
+      return this;
+    }
+    this._check(!!this.actual, `expected ${j(this.actual)} to be truthy`);
+    return this;
+  }
+  get success(): this {
+    if (this.actual && typeof this.actual === "object" && typeof this.actual.code === "number") {
+      const code = this.actual.code;
+      this._check(code >= 200 && code < 300, `expected response status 2xx but got ${code}`);
+      return this;
+    }
+    this._check(!!this.actual, `expected ${j(this.actual)} to be truthy`);
+    return this;
+  }
+  get clientError(): this {
+    if (this.actual && typeof this.actual === "object" && typeof this.actual.code === "number") {
+      const code = this.actual.code;
+      this._check(code >= 400 && code < 500, `expected client error status 4xx but got ${code}`);
+      return this;
+    }
+    throw new Error("clientError assertion is only valid for responses");
+  }
+  get serverError(): this {
+    if (this.actual && typeof this.actual === "object" && typeof this.actual.code === "number") {
+      const code = this.actual.code;
+      this._check(code >= 500 && code < 600, `expected server error status 5xx but got ${code}`);
+      return this;
+    }
+    throw new Error("serverError assertion is only valid for responses");
+  }
+  get error(): this {
+    if (this.actual && typeof this.actual === "object" && typeof this.actual.code === "number") {
+      const code = this.actual.code;
+      this._check(code >= 400 && code < 600, `expected error status 4xx/5xx but got ${code}`);
+      return this;
+    }
+    throw new Error("error assertion is only valid for responses");
+  }
   get empty(): this {
     const v = this.actual;
     const isEmpty = v == null || (typeof v === "string" && v.length === 0) ||
@@ -157,10 +200,84 @@ export function resolveVars(str: any, vars: Vars): any {
     prev = out;
     out = out.replace(/\{\{([^}]+)\}\}/g, (m, k) => {
       const key = String(k).trim();
-      return vars[key] !== undefined ? vars[key]! : m;
+      if (vars[key] !== undefined) {
+        return vars[key]!;
+      }
+      if (key === "$guid" || key === "$randomUUID") {
+        return crypto.randomUUID();
+      }
+      if (key === "$timestamp") {
+        return Math.floor(Date.now() / 1000).toString();
+      }
+      if (key === "$isoTimestamp") {
+        return new Date().toISOString();
+      }
+      if (key === "$randomInt") {
+        return Math.floor(Math.random() * 1001).toString();
+      }
+      return m;
     });
   }
   return out;
+}
+
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  const lowerName = name.toLowerCase();
+  return Object.keys(headers).some((k) => k.toLowerCase() === lowerName);
+}
+
+function getRequestBody(bodyObj: any, vars: Vars, headers: Record<string, string>): { body: any; contentType?: string } | null {
+  if (!bodyObj || bodyObj.disabled === true) return null;
+  const mode = bodyObj.mode;
+  if (!mode) return null;
+
+  if (mode === "raw" && typeof bodyObj.raw === "string") {
+    return { body: resolveVars(bodyObj.raw, vars) };
+  }
+
+  if (mode === "urlencoded" && Array.isArray(bodyObj.urlencoded)) {
+    const params = new URLSearchParams();
+    for (const param of bodyObj.urlencoded) {
+      if (param.disabled !== true && param.key) {
+        params.append(resolveVars(param.key, vars), resolveVars(param.value || "", vars));
+      }
+    }
+    return {
+      body: params.toString(),
+      contentType: "application/x-www-form-urlencoded",
+    };
+  }
+
+  if (mode === "formdata" && Array.isArray(bodyObj.formdata)) {
+    const fd = new FormData();
+    for (const item of bodyObj.formdata) {
+      if (item.disabled !== true && item.key) {
+        if (item.type === "file") {
+          fd.append(resolveVars(item.key, vars), item.src || item.value || "");
+        } else {
+          fd.append(resolveVars(item.key, vars), resolveVars(item.value || "", vars));
+        }
+      }
+    }
+    return { body: fd };
+  }
+
+  if (mode === "graphql" && bodyObj.graphql) {
+    try {
+      const query = resolveVars(bodyObj.graphql.query, vars);
+      const variables = bodyObj.graphql.variables
+        ? JSON.parse(resolveVars(bodyObj.graphql.variables, vars))
+        : undefined;
+      return {
+        body: JSON.stringify({ query, variables }),
+        contentType: "application/json",
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 /* ============ pm sandbox ============ */
@@ -175,6 +292,7 @@ function makePm(vars: Vars, response: any, pending: Promise<unknown>[]) {
   const results: PmAssertion[] = [];
   const pm: any = {
     environment: env,
+    globals: env,
     variables: { get: env.get, set: env.set },
     collectionVariables: { get: env.get, set: env.set },
     expect,
@@ -185,12 +303,62 @@ function makePm(vars: Vars, response: any, pending: Promise<unknown>[]) {
     },
     sendRequest: (req: any, cb?: (err: any, resp: any) => void) => {
       const url = typeof req === "string" ? req : req.url;
-      const method = (typeof req === "object" && req.method) || "GET";
+      const method = ((typeof req === "object" && req.method) || "GET").toUpperCase();
+      const sendHeaders: Record<string, string> = {};
+      let sendBody: any = undefined;
+
+      if (typeof req === "object" && req !== null) {
+        const rawHeaders = req.header || req.headers;
+        if (rawHeaders) {
+          if (Array.isArray(rawHeaders)) {
+            for (const h of rawHeaders) {
+              if (h && h.key && h.disabled !== true) {
+                sendHeaders[h.key] = resolveVars(h.value, vars);
+              }
+            }
+          } else if (typeof rawHeaders === "object") {
+            for (const [k, v] of Object.entries(rawHeaders)) {
+              sendHeaders[k] = resolveVars(String(v), vars);
+            }
+          }
+        }
+
+        if (req.body) {
+          if (typeof req.body === "string") {
+            sendBody = resolveVars(req.body, vars);
+          } else if (typeof req.body === "object") {
+            const bodyResult = getRequestBody(req.body, vars, sendHeaders);
+            if (bodyResult) {
+              sendBody = bodyResult.body;
+              if (bodyResult.contentType && !hasHeader(sendHeaders, "Content-Type")) {
+                sendHeaders["Content-Type"] = bodyResult.contentType;
+              }
+            }
+          }
+        }
+      }
+
       const p = (async () => {
         try {
-          const r = await fetch(resolveVars(url, vars), { method });
+          const fetchOptions: any = {
+            method,
+            headers: sendHeaders,
+          };
+          if (sendBody !== undefined && method !== "GET" && method !== "HEAD") {
+            fetchOptions.body = sendBody;
+          }
+          const r = await fetch(resolveVars(url, vars), fetchOptions);
           const text = await r.text();
-          const resp = { code: r.status, status: r.statusText, json: () => JSON.parse(text), text: () => text };
+          const resp = {
+            code: r.status,
+            status: r.statusText,
+            json: () => JSON.parse(text),
+            text: () => text,
+            headers: {
+              get: (name: string) => r.headers.get(name),
+              has: (name: string) => r.headers.has(name),
+            },
+          };
           if (cb) cb(null, resp);
         } catch (e) { if (cb) cb(e, null); }
       })();
@@ -293,20 +461,44 @@ async function executeItem(item: any, ctx: { vars: Vars; collectionPre: (string 
   const url = resolveVars(rawUrl(item.request), vars);
   const method = (item.request.method || "GET").toUpperCase();
   const headers: Record<string, string> = {};
-  for (const h of item.request.header || []) if (h && h.key) headers[h.key] = resolveVars(h.value, vars);
+  for (const h of item.request.header || []) {
+    if (h && h.key && h.disabled !== true) {
+      headers[h.key] = resolveVars(h.value, vars);
+    }
+  }
+
+  const bodyResult = getRequestBody(item.request.body, vars, headers);
+  let fetchBody: any = undefined;
+  if (bodyResult) {
+    fetchBody = bodyResult.body;
+    if (bodyResult.contentType && !hasHeader(headers, "Content-Type")) {
+      headers["Content-Type"] = bodyResult.contentType;
+    }
+  }
 
   const started = Date.now();
   let status: number | null = null;
   let statusText: string | null = null;
   let text: string | null = null;
   let reqErr: string | null = null;
+  let responseHeaders: Headers | null = null;
+
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-    const r = await fetch(url, { method, headers, signal: ctrl.signal });
+    const fetchOptions: any = {
+      method,
+      headers,
+      signal: ctrl.signal,
+    };
+    if (fetchBody !== undefined && method !== "GET" && method !== "HEAD") {
+      fetchOptions.body = fetchBody;
+    }
+    const r = await fetch(url, fetchOptions);
     clearTimeout(timer);
     status = r.status;
     statusText = r.statusText;
+    responseHeaders = r.headers;
     text = await r.text();
   } catch (e: any) {
     reqErr = String(e?.message ?? e);
@@ -317,6 +509,10 @@ async function executeItem(item: any, ctx: { vars: Vars; collectionPre: (string 
     code: status, status: statusText, responseTime: timeMs,
     json: () => JSON.parse(text as string), text: () => text,
     to: new Assertion({ code: status }),
+    headers: {
+      get: (name: string) => (responseHeaders ? responseHeaders.get(name) : null),
+      has: (name: string) => (responseHeaders ? responseHeaders.has(name) : false),
+    },
   };
   let assertions: PmAssertion[] = [];
   const testExec = getEventExec(item, "test");
