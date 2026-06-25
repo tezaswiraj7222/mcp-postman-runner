@@ -60,3 +60,4 @@ coverage/
 
 # Deploy keys (generated for CI)
 *.deploy.key
+MXTS-*

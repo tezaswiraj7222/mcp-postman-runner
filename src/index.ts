@@ -53,13 +53,15 @@ ${colors.bold}${colors.blue}OPTIONS:${colors.reset}
 
 ${colors.bold}${colors.blue}TOOLS:${colors.reset}
   ${colors.magenta}list_folders${colors.reset}   List folders in a Postman collection
+  ${colors.magenta}preview_requests${colors.reset} Preview resolved URLs, redacted headers and bodies without HTTP execution
   ${colors.magenta}run_folder${colors.reset}     Run every request in a folder; return results + assertions
   ${colors.magenta}run_request${colors.reset}    Run a single named request
 
 ${colors.bold}${colors.blue}HOW IT WORKS:${colors.reset}
   Pass a Postman collection (and optional environment) JSON. The server resolves
-  {{variables}}, runs pre-request scripts (auth token via pm.sendRequest), fires each
-  request, evaluates the embedded pm.test scripts, and returns structured results.
+  {{variables}}, can preview resolved requests, runs pre-request scripts (auth token
+  via pm.sendRequest), fires each request, evaluates the embedded pm.test scripts,
+  and returns structured results.
   It holds no Postman credentials — the caller passes the collection/environment in.
 
 ${colors.bold}${colors.blue}MCP CONFIGURATION:${colors.reset}

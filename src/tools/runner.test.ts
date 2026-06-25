@@ -94,6 +94,46 @@ describe("list_folders", () => {
   });
 });
 
+describe("preview_requests", () => {
+  it("resolves requests without executing HTTP calls and redacts sensitive values", async () => {
+    const previewCollection = {
+      info: { name: "Preview Collection" },
+      item: [{ name: "Preview", id: "P1", item: [{
+        name: "TC-Preview-Post",
+        request: {
+          method: "POST",
+          header: [
+            { key: "Authorization", value: "Bearer {{token}}" },
+            { key: "X-Trace", value: "trace-1" },
+          ],
+          body: { mode: "raw", raw: JSON.stringify({ name: "demo", password: "secret" }) },
+          url: { raw: "{{url}}test-payload-echo?api_key={{apiKey}}" },
+        },
+      }] }],
+    };
+    const previewEnvironment = { values: [
+      { key: "url", value: "https://api-dev.example.net/", enabled: true },
+      { key: "token", value: "TOK123", enabled: true },
+      { key: "apiKey", value: "KEY123", enabled: true },
+    ] };
+
+    const out = parse(await handlers.get("preview_requests")!({ collection: previewCollection, environment: previewEnvironment, folderId: "P1" }));
+
+    expect(authCalls).toBe(0);
+    expect(cityCalls).toBe(0);
+    expect(out.summary.writeRequests).toBe(1);
+    expect(out.safety.blocked).toBe(true);
+    expect(out.safety.writeMethods).toEqual(["POST"]);
+    expect(out.requests[0].method).toBe("POST");
+    expect(out.requests[0].url).toContain("api_key=%3Credacted%3E");
+    expect(out.requests[0].headers.Authorization).toBe("<redacted>");
+    expect(out.requests[0].headers["X-Trace"]).toBe("trace-1");
+    expect(out.requests[0].body.sent).toBe(true);
+    expect(out.requests[0].body.contentType).toBe("application/json");
+    expect(out.requests[0].body.preview).toContain('"password":"<redacted>"');
+  });
+});
+
 describe("run_folder", () => {
   it("authenticates once, runs each request once, evaluates pm.test scripts", async () => {
     const out = parse(await handlers.get("run_folder")!({ collection, environment, folderId: "F1" }));
@@ -105,12 +145,53 @@ describe("run_folder", () => {
     expect(byName["TC-02"].assertionsFailed).toBe(1);   // languageId missing -> language
     expect(byName["TC-05"].status).toBe(400);
     expect(byName["TC-05"].assertionsFailed).toBe(1);   // ticket expected 200
+    expect(out.summary.methodCounts.GET).toBe(3);
+    expect(out.summary.statusCounts["200"]).toBe(2);
+    expect(out.summary.statusCounts["400"]).toBe(1);
     expect(out.summary.anyFailure).toBe(true);
   });
 
   it("errors when no folder selector is given", async () => {
     const res = await handlers.get("run_folder")!({ collection });
     expect(res.isError).toBe(true);
+  });
+
+  it("blocks write methods unless explicitly approved", async () => {
+    const writeCollection = {
+      info: { name: "Write Collection" },
+      item: [{ name: "Writes", id: "W1", item: [{
+        name: "TC-Write",
+        request: {
+          method: "POST",
+          body: { mode: "raw", raw: "{}", options: { raw: { language: "json" } } },
+          url: { raw: "https://api-dev.example.net/test-payload-echo" },
+        },
+      }] }],
+    };
+
+    const res = await handlers.get("run_folder")!({ collection: writeCollection, folderId: "W1" });
+
+    expect(res.isError).toBe(true);
+    expect(parse(res as any).error).toContain("write methods detected");
+  });
+
+  it("requires an approval note when writes are explicitly approved", async () => {
+    const writeCollection = {
+      info: { name: "Write Collection" },
+      item: [{ name: "Writes", id: "W1", item: [{
+        name: "TC-Write",
+        request: {
+          method: "POST",
+          body: { mode: "raw", raw: "{}", options: { raw: { language: "json" } } },
+          url: { raw: "https://api-dev.example.net/test-payload-echo" },
+        },
+      }] }],
+    };
+
+    const res = await handlers.get("run_folder")!({ collection: writeCollection, folderId: "W1", allowWrites: true });
+
+    expect(res.isError).toBe(true);
+    expect(parse(res as any).error).toContain("approvalNote is required");
   });
 });
 
@@ -162,6 +243,48 @@ describe("extra sandbox and engine features", () => {
             ]
           },
           {
+            name: "TC-Body-Raw-Auto-Json",
+            request: {
+              method: "POST",
+              header: [],
+              body: {
+                mode: "raw",
+                raw: "{\"message\":\"Hello Auto\"}",
+                options: { raw: { language: "json" } }
+              },
+              url: { raw: "https://api-dev.example.net/test-payload-echo" }
+            },
+            event: [
+              test([
+                "const body = pm.response.json();",
+                "pm.test('Auto JSON content type was sent', () => pm.expect(body.headers['Content-Type']).to.eql('application/json'));",
+                "pm.test('Auto JSON raw body was sent', () => pm.expect(body.body).to.include('Hello Auto'));"
+              ])
+            ]
+          },
+          {
+            name: "TC-Put-Urlencoded",
+            request: {
+              method: "PUT",
+              header: [],
+              body: {
+                mode: "urlencoded",
+                urlencoded: [
+                  { key: "name", value: "Demo" },
+                  { key: "token", value: "secret-token" }
+                ]
+              },
+              url: { raw: "https://api-dev.example.net/test-payload-echo" }
+            },
+            event: [
+              test([
+                "const body = pm.response.json();",
+                "pm.test('PUT urlencoded content type was sent', () => pm.expect(body.headers['Content-Type']).to.eql('application/x-www-form-urlencoded'));",
+                "pm.test('PUT urlencoded body was sent', () => pm.expect(body.body).to.include('name=Demo'));"
+              ])
+            ]
+          },
+          {
             name: "TC-Send-Request",
             request: {
               method: "GET",
@@ -191,11 +314,18 @@ describe("extra sandbox and engine features", () => {
   };
 
   it("resolves dynamic variables, handles bodies, parses response headers, and implements globals", async () => {
-    const out = parse(await handlers.get("run_folder")!({ collection: collectionExtra, folderId: "F2" }));
-    expect(out.results).toHaveLength(2);
+    const out = parse(await handlers.get("run_folder")!({ collection: collectionExtra, folderId: "F2", allowWrites: true, approvalNote: "unit test write approval" }));
+    expect(out.results).toHaveLength(4);
     expect(out.summary.anyFailure).toBe(false); // All assertions must pass!
     expect(out.results[0].assertionsFailed).toBe(0);
     expect(out.results[1].assertionsFailed).toBe(0);
+    expect(out.results[0].request.headers["X-Disabled"]).toBeUndefined();
+    expect(out.results[0].request.body.sent).toBe(true);
+    expect(out.results[1].request.body.contentType).toBe("application/json");
+    expect(out.results[2].request.method).toBe("PUT");
+    expect(out.results[2].request.body.contentType).toBe("application/x-www-form-urlencoded");
+    expect(out.summary.methodCounts.POST).toBe(2);
+    expect(out.summary.methodCounts.PUT).toBe(1);
   });
 
   it("verifies special Assertion response code checkers", () => {

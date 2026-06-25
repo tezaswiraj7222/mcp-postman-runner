@@ -10,6 +10,8 @@
 import crypto from "crypto";
 
 const MAX_BODY_CHARS = 20_000;
+const BODY_PREVIEW_CHARS = 500;
+const SENSITIVE_KEY_RE = /(authorization|cookie|token|secret|password|passwd|api[-_]?key|client[-_]?secret)/i;
 
 /* ============ types ============ */
 
@@ -22,6 +24,7 @@ export interface RequestResult {
   name: string;
   method: string | null;
   url: string | null;
+  request: RequestDiagnostics | null;
   status: number | null;
   statusText: string | null;
   timeMs: number | null;
@@ -29,7 +32,9 @@ export interface RequestResult {
   assertionsFailed: number;
   assertions: PmAssertion[];
   responseBody: string | null;
+  response: ResponseDiagnostics | null;
   requestError: string | null;
+  warnings: string[];
 }
 export interface RunSummary {
   totalRequests: number;
@@ -37,10 +42,63 @@ export interface RunSummary {
   assertionsTotal: number;
   assertionsFailed: number;
   anyFailure: boolean;
+  durationMs: number;
+  methodCounts: Record<string, number>;
+  statusCounts: Record<string, number>;
+  bytesReceived: number;
 }
 export interface RunOutput {
   summary: RunSummary;
   results: RequestResult[];
+}
+export interface SafetyOptions {
+  allowProduction?: boolean;
+  allowWrites?: boolean;
+  approvalNote?: string;
+}
+export interface SafetyAssessment {
+  blocked: boolean;
+  productionLikeTargets: string[];
+  writeMethods: string[];
+  warnings: string[];
+  approvalNote: string | null;
+}
+export interface RequestBodyDiagnostics {
+  mode: string | null;
+  sent: boolean;
+  contentType: string | null;
+  bytes: number | null;
+  preview: string | null;
+  previewTruncated: boolean;
+}
+export interface RequestDiagnostics {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: RequestBodyDiagnostics;
+}
+export interface ResponseDiagnostics {
+  contentType: string | null;
+  bytes: number;
+  bodyTruncated: boolean;
+}
+export interface RequestPreview {
+  name: string;
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: RequestBodyDiagnostics;
+  warnings: string[];
+}
+export interface PreviewOutput {
+  summary: {
+    totalRequests: number;
+    methodCounts: Record<string, number>;
+    writeRequests: number;
+    warnings: number;
+  };
+  safety: SafetyAssessment;
+  requests: RequestPreview[];
 }
 export interface FolderInfo {
   name: string;
@@ -55,8 +113,30 @@ export interface RunOptions {
   folderName?: string;
   requestName?: string;
   timeoutMs?: number;
+  safety?: SafetyOptions;
 }
 type Vars = Record<string, string>;
+type RequestBodyBuild = {
+  body: any;
+  mode: string;
+  contentType?: string;
+  bytes: number | null;
+  preview: string | null;
+  previewTruncated: boolean;
+  warnings: string[];
+};
+type BuiltRequest = {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  fetchBody: any;
+  body: RequestBodyDiagnostics;
+  warnings: string[];
+};
+type SafetyTarget = { label: string; url: string };
+const SAFE_NON_PROD_HOST_RE = /(^localhost$|^127\.|^0\.0\.0\.0$|\.local$|dev|test|qa|uat|acc|stage|staging|sandbox|mock|example)/i;
+const EXPLICIT_PROD_HOST_RE = /(^api\.|prod|production|live)/i;
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /* ============ chai-like expect (subset used by Postman test scripts) ============ */
 
@@ -226,13 +306,94 @@ function hasHeader(headers: Record<string, string>, name: string): boolean {
   return Object.keys(headers).some((k) => k.toLowerCase() === lowerName);
 }
 
-function getRequestBody(bodyObj: any, vars: Vars, headers: Record<string, string>): { body: any; contentType?: string } | null {
+function redactValue(key: string, value: string): string {
+  return SENSITIVE_KEY_RE.test(key) ? "<redacted>" : value;
+}
+
+function redactHeaders(headers: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) out[key] = redactValue(key, value);
+  return out;
+}
+
+function redactUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    for (const key of Array.from(parsed.searchParams.keys())) {
+      if (SENSITIVE_KEY_RE.test(key)) parsed.searchParams.set(key, "<redacted>");
+    }
+    if (parsed.username) parsed.username = "<redacted>";
+    if (parsed.password) parsed.password = "<redacted>";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+function redactPayloadPreview(text: string, contentType?: string): string {
+  const type = contentType || "";
+  if (type.includes("json")) {
+    try {
+      const redact = (value: any): any => {
+        if (Array.isArray(value)) return value.map(redact);
+        if (value && typeof value === "object") {
+          const out: Record<string, any> = {};
+          for (const [key, child] of Object.entries(value)) out[key] = SENSITIVE_KEY_RE.test(key) ? "<redacted>" : redact(child);
+          return out;
+        }
+        return value;
+      };
+      return JSON.stringify(redact(JSON.parse(text)));
+    } catch {
+      return text;
+    }
+  }
+  if (type.includes("x-www-form-urlencoded")) {
+    const params = new URLSearchParams(text);
+    for (const key of Array.from(params.keys())) {
+      if (SENSITIVE_KEY_RE.test(key)) params.set(key, "<redacted>");
+    }
+    return params.toString();
+  }
+  return text;
+}
+
+function previewText(text: string, contentType?: string): { preview: string; truncated: boolean } {
+  const redacted = redactPayloadPreview(text, contentType);
+  return {
+    preview: redacted.length > BODY_PREVIEW_CHARS ? redacted.slice(0, BODY_PREVIEW_CHARS) + "..." : redacted,
+    truncated: redacted.length > BODY_PREVIEW_CHARS,
+  };
+}
+
+function byteLength(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
+function inferRawContentType(bodyObj: any, raw: string): string | undefined {
+  const language = String(bodyObj?.options?.raw?.language || "").toLowerCase();
+  if (language === "json") return "application/json";
+  if (language === "xml") return "application/xml";
+  if (language === "html") return "text/html";
+  if (language === "javascript") return "application/javascript";
+  if (language === "text") return "text/plain";
+  const trimmed = raw.trim();
+  if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+    try { JSON.parse(trimmed); return "application/json"; } catch { return undefined; }
+  }
+  return undefined;
+}
+
+function getRequestBody(bodyObj: any, vars: Vars, headers: Record<string, string>): RequestBodyBuild | null {
   if (!bodyObj || bodyObj.disabled === true) return null;
   const mode = bodyObj.mode;
   if (!mode) return null;
 
   if (mode === "raw" && typeof bodyObj.raw === "string") {
-    return { body: resolveVars(bodyObj.raw, vars) };
+    const raw = resolveVars(bodyObj.raw, vars);
+    const contentType = inferRawContentType(bodyObj, raw);
+    const preview = previewText(raw, contentType);
+    return { body: raw, mode, contentType, bytes: byteLength(raw), preview: preview.preview, previewTruncated: preview.truncated, warnings: [] };
   }
 
   if (mode === "urlencoded" && Array.isArray(bodyObj.urlencoded)) {
@@ -242,24 +403,36 @@ function getRequestBody(bodyObj: any, vars: Vars, headers: Record<string, string
         params.append(resolveVars(param.key, vars), resolveVars(param.value || "", vars));
       }
     }
+    const body = params.toString();
+    const contentType = "application/x-www-form-urlencoded";
+    const preview = previewText(body, contentType);
     return {
-      body: params.toString(),
-      contentType: "application/x-www-form-urlencoded",
+      body,
+      mode,
+      contentType,
+      bytes: byteLength(body),
+      preview: preview.preview,
+      previewTruncated: preview.truncated,
+      warnings: [],
     };
   }
 
   if (mode === "formdata" && Array.isArray(bodyObj.formdata)) {
     const fd = new FormData();
+    const warnings: string[] = [];
+    let fields = 0;
     for (const item of bodyObj.formdata) {
       if (item.disabled !== true && item.key) {
+        fields++;
         if (item.type === "file") {
+          warnings.push(`formdata file field "${item.key}" cannot load local files; appended file source as a string placeholder`);
           fd.append(resolveVars(item.key, vars), item.src || item.value || "");
         } else {
           fd.append(resolveVars(item.key, vars), resolveVars(item.value || "", vars));
         }
       }
     }
-    return { body: fd };
+    return { body: fd, mode, bytes: null, preview: `[FormData: ${fields} field${fields === 1 ? "" : "s"}]`, previewTruncated: false, warnings };
   }
 
   if (mode === "graphql" && bodyObj.graphql) {
@@ -270,14 +443,23 @@ function getRequestBody(bodyObj: any, vars: Vars, headers: Record<string, string
         : undefined;
       return {
         body: JSON.stringify({ query, variables }),
+        mode,
         contentType: "application/json",
+        bytes: byteLength(JSON.stringify({ query, variables })),
+        preview: previewText(JSON.stringify({ query, variables }), "application/json").preview,
+        previewTruncated: previewText(JSON.stringify({ query, variables }), "application/json").truncated,
+        warnings: [],
       };
-    } catch {
-      return null;
+    } catch (e: any) {
+      return { body: undefined, mode, bytes: null, preview: null, previewTruncated: false, warnings: [`invalid GraphQL variables JSON: ${e?.message ?? String(e)}`] };
     }
   }
 
-  return null;
+  if (mode === "file") {
+    return { body: undefined, mode, bytes: null, preview: null, previewTruncated: false, warnings: ["Postman file body mode is not supported by this runner"] };
+  }
+
+  return { body: undefined, mode, bytes: null, preview: null, previewTruncated: false, warnings: [`unsupported request body mode: ${mode}`] };
 }
 
 /* ============ pm sandbox ============ */
@@ -440,6 +622,25 @@ function rawUrl(req: any): string {
   if (typeof u === "string") return u;
   return u.raw || "";
 }
+
+function pathQueryUrl(req: any): string {
+  const raw = rawUrl(req);
+  if (raw) return raw;
+  const u = req.url;
+  if (!u || typeof u === "string") return raw;
+  const protocol = u.protocol ? `${u.protocol}://` : "";
+  const host = Array.isArray(u.host) ? u.host.join(".") : (u.host || "");
+  const path = Array.isArray(u.path) ? u.path.join("/") : (u.path || "");
+  const query = Array.isArray(u.query)
+    ? u.query
+      .filter((q: any) => q && q.disabled !== true && q.key)
+      .map((q: any) => `${encodeURIComponent(q.key)}=${encodeURIComponent(q.value ?? "")}`)
+      .join("&")
+    : "";
+  const base = `${protocol}${host}${path ? `/${path}` : ""}`;
+  return query ? `${base}?${query}` : base;
+}
+
 function getEventExec(item: any, listen: string): (string | null)[] | null {
   for (const ev of item.event || []) if (ev.listen === listen && ev.script) return ev.script.exec || [];
   return null;
@@ -448,8 +649,123 @@ function getEventExec(item: any, listen: string): (string | null)[] | null {
 function truncate(text: string | null): string | null {
   if (text == null) return null;
   return text.length > MAX_BODY_CHARS
-    ? text.slice(0, MAX_BODY_CHARS) + `\n…[truncated ${text.length - MAX_BODY_CHARS} chars]`
+    ? text.slice(0, MAX_BODY_CHARS) + `\n...[truncated ${text.length - MAX_BODY_CHARS} chars]`
     : text;
+}
+
+function defaultBodyDiagnostics(mode: string | null = null): RequestBodyDiagnostics {
+  return { mode, sent: false, contentType: null, bytes: null, preview: null, previewTruncated: false };
+}
+
+function buildRequest(request: any, vars: Vars): BuiltRequest {
+  const url = resolveVars(pathQueryUrl(request), vars);
+  const method = (request.method || "GET").toUpperCase();
+  const headers: Record<string, string> = {};
+  for (const h of request.header || []) {
+    if (h && h.key && h.disabled !== true) {
+      headers[h.key] = resolveVars(h.value, vars);
+    }
+  }
+
+  const bodyResult = getRequestBody(request.body, vars, headers);
+  const warnings = bodyResult ? [...bodyResult.warnings] : [];
+  let fetchBody: any = undefined;
+  let body = defaultBodyDiagnostics(request.body?.mode ?? null);
+  if (bodyResult) {
+    if (bodyResult.contentType && !hasHeader(headers, "Content-Type")) {
+      headers["Content-Type"] = bodyResult.contentType;
+    }
+    if (bodyResult.body !== undefined && method !== "GET" && method !== "HEAD") {
+      fetchBody = bodyResult.body;
+      const contentType = bodyResult.contentType || Object.entries(headers).find(([key]) => key.toLowerCase() === "content-type")?.[1] || null;
+      body = {
+        mode: bodyResult.mode,
+        sent: true,
+        contentType,
+        bytes: bodyResult.bytes,
+        preview: bodyResult.preview,
+        previewTruncated: bodyResult.previewTruncated,
+      };
+    } else if (bodyResult.body !== undefined) {
+      warnings.push(`body was defined but omitted for ${method} requests`);
+      body = {
+        mode: bodyResult.mode,
+        sent: false,
+        contentType: bodyResult.contentType || null,
+        bytes: bodyResult.bytes,
+        preview: bodyResult.preview,
+        previewTruncated: bodyResult.previewTruncated,
+      };
+    }
+  }
+
+  return { method, url, headers, fetchBody, body, warnings };
+}
+
+function requestDiagnostics(built: BuiltRequest): RequestDiagnostics {
+  return {
+    method: built.method,
+    url: redactUrl(built.url),
+    headers: redactHeaders(built.headers),
+    body: built.body,
+  };
+}
+
+function isProductionLikeUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (["localhost", "127.0.0.1", "0.0.0.0"].includes(parsed.hostname)) return false;
+    if (SAFE_NON_PROD_HOST_RE.test(parsed.hostname)) return false;
+    return EXPLICIT_PROD_HOST_RE.test(parsed.hostname) || ["http:", "https:"].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function environmentTargets(environment: any): SafetyTarget[] {
+  const targets: SafetyTarget[] = [];
+  for (const value of (environment && environment.values) || []) {
+    if (value?.enabled === false || typeof value?.value !== "string") continue;
+    if (!/url|uri|endpoint/i.test(String(value.key))) continue;
+    const candidate = value.value;
+    if (/^https?:\/\//i.test(candidate)) targets.push({ label: `environment.${value.key}`, url: candidate });
+  }
+  return targets;
+}
+
+function assessSafety(requests: Array<{ method: string; url: string }>, environment: any, safety?: SafetyOptions): SafetyAssessment {
+  const targets: SafetyTarget[] = [
+    ...requests.map((request) => ({ label: `${request.method} ${request.url}`, url: request.url })),
+    ...environmentTargets(environment),
+  ];
+  const productionLikeTargets = Array.from(new Set(
+    targets
+      .filter((target) => isProductionLikeUrl(target.url))
+      .map((target) => redactUrl(target.url)),
+  ));
+  const writeMethods = Array.from(new Set(requests.filter((request) => WRITE_METHODS.has(request.method)).map((request) => request.method))).sort();
+  const warnings: string[] = [];
+  if (productionLikeTargets.length > 0 && !safety?.allowProduction) {
+    warnings.push("production-like target detected; pass allowProduction with an approval note to execute");
+  }
+  if (writeMethods.length > 0 && !safety?.allowWrites) {
+    warnings.push("write methods detected; pass allowWrites after confirming the target is safe for mutation");
+  }
+  if ((productionLikeTargets.length > 0 && safety?.allowProduction) || (writeMethods.length > 0 && safety?.allowWrites)) {
+    if (!safety?.approvalNote?.trim()) warnings.push("approvalNote is required when allowProduction or allowWrites is used");
+  }
+  return {
+    blocked: warnings.length > 0,
+    productionLikeTargets,
+    writeMethods,
+    warnings,
+    approvalNote: safety?.approvalNote || null,
+  };
+}
+
+function assertRunnable(safety: SafetyAssessment): void {
+  if (!safety.blocked) return;
+  throw new Error(`Safety gate blocked execution: ${safety.warnings.join("; ")}`);
 }
 
 async function executeItem(item: any, ctx: { vars: Vars; collectionPre: (string | null)[] | null; timeoutMs: number }): Promise<RequestResult> {
@@ -458,23 +774,7 @@ async function executeItem(item: any, ctx: { vars: Vars; collectionPre: (string 
   const itemPre = getEventExec(item, "prerequest");
   if (itemPre) await runScript(itemPre, vars, undefined, { allowSend: true });
 
-  const url = resolveVars(rawUrl(item.request), vars);
-  const method = (item.request.method || "GET").toUpperCase();
-  const headers: Record<string, string> = {};
-  for (const h of item.request.header || []) {
-    if (h && h.key && h.disabled !== true) {
-      headers[h.key] = resolveVars(h.value, vars);
-    }
-  }
-
-  const bodyResult = getRequestBody(item.request.body, vars, headers);
-  let fetchBody: any = undefined;
-  if (bodyResult) {
-    fetchBody = bodyResult.body;
-    if (bodyResult.contentType && !hasHeader(headers, "Content-Type")) {
-      headers["Content-Type"] = bodyResult.contentType;
-    }
-  }
+  const built = buildRequest(item.request, vars);
 
   const started = Date.now();
   let status: number | null = null;
@@ -487,14 +787,14 @@ async function executeItem(item: any, ctx: { vars: Vars; collectionPre: (string 
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     const fetchOptions: any = {
-      method,
-      headers,
+      method: built.method,
+      headers: built.headers,
       signal: ctrl.signal,
     };
-    if (fetchBody !== undefined && method !== "GET" && method !== "HEAD") {
-      fetchOptions.body = fetchBody;
+    if (built.fetchBody !== undefined) {
+      fetchOptions.body = built.fetchBody;
     }
-    const r = await fetch(url, fetchOptions);
+    const r = await fetch(built.url, fetchOptions);
     clearTimeout(timer);
     status = r.status;
     statusText = r.statusText;
@@ -520,12 +820,23 @@ async function executeItem(item: any, ctx: { vars: Vars; collectionPre: (string 
 
   return {
     name: item.name || "(unnamed)",
-    method, url, status, statusText, timeMs,
+    method: built.method,
+    url: redactUrl(built.url),
+    request: requestDiagnostics(built),
+    status,
+    statusText,
+    timeMs,
     assertionsPassed: assertions.filter((a) => a.passed).length,
     assertionsFailed: assertions.filter((a) => !a.passed).length,
     assertions,
     responseBody: truncate(text),
+    response: text == null ? null : {
+      contentType: responseHeaders ? responseHeaders.get("content-type") : null,
+      bytes: byteLength(text),
+      bodyTruncated: text.length > MAX_BODY_CHARS,
+    },
     requestError: reqErr,
+    warnings: built.warnings,
   };
 }
 
@@ -537,10 +848,49 @@ function collectVars(collection: any, environment: any): Vars {
 }
 
 export async function runFolder(opts: RunOptions): Promise<RunOutput> {
-  const { collection, environment, folderId, folderName, requestName, timeoutMs } = opts;
+  const { collection, environment, folderId, folderName, requestName, timeoutMs, safety } = opts;
   const vars = collectVars(collection, environment);
   const collectionPre = getEventExec(collection, "prerequest");
+  const runStarted = Date.now();
 
+  const items = selectItems({ collection, folderId, folderName, requestName });
+  const builtForSafety = items.map((item) => buildRequest(item.request, vars));
+  assertRunnable(assessSafety(builtForSafety, environment, safety));
+
+  const ctx = { vars, collectionPre, timeoutMs: timeoutMs ?? 30_000 };
+  const results: RequestResult[] = [];
+  for (const item of items) results.push(await executeItem(item, ctx)); // sequential: shared token/vars
+
+  const assertionsTotal = results.reduce((n, r) => n + r.assertions.length, 0);
+  const assertionsFailed = results.reduce((n, r) => n + r.assertionsFailed, 0);
+  const methodCounts = results.reduce<Record<string, number>>((acc, r) => {
+    const key = r.method || "UNKNOWN";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const statusCounts = results.reduce<Record<string, number>>((acc, r) => {
+    const key = r.status == null ? "ERROR" : String(r.status);
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  return {
+    summary: {
+      totalRequests: results.length,
+      requestsErrored: results.filter((r) => r.requestError).length,
+      assertionsTotal,
+      assertionsFailed,
+      anyFailure: assertionsFailed > 0 || results.some((r) => r.requestError),
+      durationMs: Date.now() - runStarted,
+      methodCounts,
+      statusCounts,
+      bytesReceived: results.reduce((n, r) => n + (r.response?.bytes || 0), 0),
+    },
+    results,
+  };
+}
+
+function selectItems(opts: { collection: any; folderId?: string; folderName?: string; requestName?: string }): any[] {
+  const { collection, folderId, folderName, requestName } = opts;
   let items: any[];
   if (folderId || folderName) {
     const folder = findFolder(collection, { folderId, folderName });
@@ -556,22 +906,39 @@ export async function runFolder(opts: RunOptions): Promise<RunOutput> {
     const want = String(requestName).trim().toLowerCase();
     items = items.filter((i) => String(i.name).trim().toLowerCase() === want);
   }
+  return items;
+}
 
-  const ctx = { vars, collectionPre, timeoutMs: timeoutMs ?? 30_000 };
-  const results: RequestResult[] = [];
-  for (const item of items) results.push(await executeItem(item, ctx)); // sequential: shared token/vars
-
-  const assertionsTotal = results.reduce((n, r) => n + r.assertions.length, 0);
-  const assertionsFailed = results.reduce((n, r) => n + r.assertionsFailed, 0);
+export function previewRequests(opts: RunOptions): PreviewOutput {
+  const { collection, environment, folderId, folderName, requestName, safety } = opts;
+  const vars = collectVars(collection, environment);
+  const builtRequests: Array<BuiltRequest & { name: string }> = selectItems({ collection, folderId, folderName, requestName }).map((item) => ({
+    name: item.name || "(unnamed)",
+    ...buildRequest(item.request, vars),
+  }));
+  const requests = builtRequests.map<RequestPreview>((built) => {
+    return {
+      name: built.name,
+      method: built.method,
+      url: redactUrl(built.url),
+      headers: redactHeaders(built.headers),
+      body: built.body,
+      warnings: built.warnings,
+    };
+  });
+  const methodCounts = requests.reduce<Record<string, number>>((acc, r) => {
+    acc[r.method] = (acc[r.method] || 0) + 1;
+    return acc;
+  }, {});
   return {
     summary: {
-      totalRequests: results.length,
-      requestsErrored: results.filter((r) => r.requestError).length,
-      assertionsTotal,
-      assertionsFailed,
-      anyFailure: assertionsFailed > 0 || results.some((r) => r.requestError),
+      totalRequests: requests.length,
+      methodCounts,
+      writeRequests: requests.filter((r) => !["GET", "HEAD", "OPTIONS"].includes(r.method)).length,
+      warnings: requests.reduce((n, r) => n + r.warnings.length, 0),
     },
-    results,
+    safety: assessSafety(builtRequests, environment, safety),
+    requests,
   };
 }
 

@@ -17,8 +17,9 @@ export const READ_ONLY = {
 
 /**
  * Execution tool — sends the requests defined in the collection to the outside world.
- * Side-effects depend entirely on the requests in the folder (GETs are safe; the
- * collection may contain writes), so this is neither read-only nor guaranteed idempotent.
+ * Side-effects depend entirely on the requests in the folder. Even GETs may read
+ * production data, and the collection may contain writes, so this is neither read-only
+ * nor guaranteed idempotent.
  */
 export const EXECUTE = {
   readOnlyHint: false,
