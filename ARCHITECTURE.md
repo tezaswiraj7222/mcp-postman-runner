@@ -7,7 +7,7 @@ it is handed.
 
 ## Module layout
 
-```
+```text
 src/
 ├── index.ts          # CLI entry (--help/--version/--verbose) + stdio transport + graceful shutdown
 ├── server.ts         # createServer(): builds the McpServer and registers tool groups
@@ -15,7 +15,7 @@ src/
 ├── utils.ts          # toolResult() / toolError() — wrap values as MCP CallToolResult
 ├── engine.ts         # the execution engine (no SDK dependency — pure logic, unit-testable)
 └── tools/
-    ├── runner.ts     # registerRunnerTools(): list_folders, run_folder, run_request (zod schemas)
+    ├── runner.ts     # registerRunnerTools(): list_folders, preview_requests, run_folder, run_request
     └── runner.test.ts# vitest: mocks global fetch, exercises the real handlers
 ```
 
@@ -24,7 +24,7 @@ transport, and so the same logic could be wrapped in a different transport (e.g.
 
 ## Request lifecycle (`run_folder`)
 
-```
+```text
 collection + environment JSON
         │
         ▼
@@ -37,12 +37,45 @@ collection + environment JSON
         │
         ├─ run collection-level pre-request script   ┐  pm sandbox; pm.sendRequest awaited
         ├─ run item-level pre-request script          ┘  (auth token written into vars{})
-        ├─ resolveVars(url/headers) → fetch(...)        (per-request timeout via AbortController)
+        ├─ buildRequest(url/headers/body)               (diagnostics + redacted previews)
+        ├─ safety gate                                  (prod-like/write approvals)
+        ├─ fetch(...)                                   (per-request timeout via AbortController)
         └─ run item test script over the response      → pm.test results collected
         │
         ▼
- { summary, results[] }   (status, timeMs, assertions[], responseBody, requestError)
+ { summary, results[] }   (method/status counts, diagnostics, assertions[], responseBody, requestError)
 ```
+
+`preview_requests` follows the same variable-resolution and request-build path but stops before
+pre-request scripts and HTTP execution. It is read-only and exists so agents can confirm target
+URLs, write methods, redacted auth, body shape, and safety gates before calling `run_folder`.
+
+## Request body support
+
+The engine supports common Postman body modes for write-method API tests:
+
+- `raw`: variable-resolved string body. JSON `Content-Type` is inferred from Postman raw-language
+  metadata or JSON-shaped content when the header is missing.
+- `urlencoded`: encoded with `URLSearchParams`, disabled params skipped, content type inferred.
+- `formdata`: sent with `FormData`, disabled fields skipped. File fields are represented as string
+  placeholders and returned with warnings; local file reads are intentionally not supported.
+- `graphql`: sent as JSON `{ query, variables }`; invalid variables JSON produces a warning.
+- Unsupported modes return warnings in previews/results.
+
+Bodies are omitted for `GET` and `HEAD` and reported as warnings in request diagnostics.
+
+## Safety gates
+
+The runner has two conservative execution gates:
+
+- **Production-like targets**: hosts without an obvious non-production marker, or hosts that look
+  production/live, require `allowProduction: true` plus an `approvalNote`.
+- **Write methods**: `POST`, `PUT`, `PATCH`, and `DELETE` require `allowWrites: true` plus an
+  `approvalNote`.
+
+These gates are intentionally simple and generic. They do not replace human approval, but they make
+agents stop before accidental production or mutation runs. `preview_requests` returns the same
+assessment in its `safety` object.
 
 ## The `pm` sandbox
 
@@ -70,7 +103,10 @@ script error — extend `engine.ts` as needed.
   variables a pre-request sets, mirroring a Postman collection run.
 - **Exactly one HTTP call per request** — the engine controls execution 1:1, so results never
   duplicate.
-- **Truncated bodies** — response bodies are capped at 20k chars to stay context-friendly.
+- **Redacted diagnostics** — results expose resolved URLs, headers, and body previews with
+  sensitive-looking names redacted. This improves debuggability without echoing secrets.
+- **Truncated bodies** — response bodies are capped at 20k chars to stay context-friendly, with
+  byte counts and truncation metadata returned separately.
 - **No newman, no credential store** — keeps the install tiny and the trust surface small.
 
 ## Build & release

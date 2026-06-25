@@ -38,6 +38,8 @@ caller, and the server uses only what it is handed.
   are kept **in memory for the duration of a single run** and are not persisted.
 - **No request/response body logging.** The server does not log collection contents, tokens,
   or response bodies. Response bodies returned to the caller are truncated at 20k characters.
+- **Redacted diagnostics.** Request previews/results redact sensitive-looking header names,
+  query parameters, and JSON/form body keys before returning diagnostics to the caller.
 - **Script execution.** Pre-request and `pm.test` scripts contained in the collection are
   executed with Node's `Function` constructor inside the server process. **Only run
   collections you trust** — a malicious collection's scripts run with the server's
@@ -47,6 +49,9 @@ caller, and the server uses only what it is handed.
 
 - Treat Postman environments that contain secrets as sensitive; do not commit them.
 - Prefer non-production credentials and test environments for automated runs.
+- Use `preview_requests` before execution to confirm target URLs, auth scopes, HTTP methods,
+  and write payloads. Require explicit approval for production or production-like targets,
+  including GET/read-only requests.
 - If you deploy this as a shared remote service, require an auth token and restrict network access.
 
 ## Known Considerations
@@ -55,3 +60,6 @@ caller, and the server uses only what it is handed.
   pre-request/test scripts. Do not point it at untrusted collections.
 - **Outbound requests:** the server makes the HTTP calls defined in the collection, from
   wherever it runs. Place it where that egress is acceptable.
+- **Safety gates are workflow-level:** the server exposes preview diagnostics and blocks obvious
+  production/write hazards by default, but it cannot know every organization's definition of
+  production. MCP clients and agents should require human approval for the exact target and methods.

@@ -60,3 +60,5 @@ coverage/
 
 # Deploy keys (generated for CI)
 *.deploy.key
+JIRA-*
+MXTS-*
