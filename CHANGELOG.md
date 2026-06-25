@@ -1,3 +1,10 @@
+## [1.1.0](https://github.com/tezaswiraj7222/mcp-postman-runner/compare/v1.0.1...v1.1.0) (2026-06-25)
+
+### ✨ Features
+
+* add request body support, sendRequest headers/body parsing, dynamic variables, and custom status assertions ([2b35023](https://github.com/tezaswiraj7222/mcp-postman-runner/commit/2b350235ef38a7173762fe34f34cdb4e81f01a24))
+* add request preview, safety gates, and write-method payload support ([51407e4](https://github.com/tezaswiraj7222/mcp-postman-runner/commit/51407e4814652d8febdb5a98a6dfbc99b1c02a49))
+
 # Changelog
 
 All notable changes to this project are documented in this file.
